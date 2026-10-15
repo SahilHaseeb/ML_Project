@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+venv/
+env/
+.env
+*.egg-info/
+dist/
+build/
+
+# Data — raw and processed files stay local
+data/raw/
+data/processed/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
