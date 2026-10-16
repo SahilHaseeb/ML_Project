@@ -33,8 +33,8 @@ PakSkillIQ is a data intelligence platform built to monitor, analyze, and presen
 | Phase | Title | Status | Summary |
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | Interactive Web Dashboard & Analytics | **COMPLETED** | 10 multi-page Streamlit views, dark UI, 50 sample records, comprehensive test suite. |
-| **Phase 2** | Job Data Collection & Data Cleaning | **IN-PROGRESS** | Modular collectors (Remotive, Arbeitnow), cleaning pipeline, 314 real records; live deployment pending. |
-| **Phase 3** | Pipeline Automation & Historical Data | **PLANNED** | Automated scheduled runs (GitHub Actions), incremental deduplication, cold storage. |
+| **Phase 2** | Job Data Collection & Data Cleaning | **COMPLETED** | Modular collectors (Remotive, Arbeitnow), cleaning pipeline, 314 real records; live on GitHub (`205df6d`). |
+| **Phase 3** | Pipeline Automation & Historical Data | **PLANNING** | GitHub Actions scheduled workflow design formulated; incremental accumulation & safe deployment planned. |
 | **Phase 4** | Machine Learning & NLP Modeling | **PLANNED** | TF-IDF / transformer job category classifier, resume-to-job skill gap scoring. |
 | **Phase 5** | Production Hardening & Monitoring | **PLANNED** | Persistent DB (PostgreSQL / BigQuery), automated alerting, health metrics. |
 
@@ -101,13 +101,19 @@ PakSkillIQ is a data intelligence platform built to monitor, analyze, and presen
 ## 6. Current Task & Immediate Next Steps
 
 ### Current Task Status
-- **Documentation & Rules Setup**:
-  - `PROJECT_MASTER_LOG.md` created at project root.
-  - `AGENTS.md` and `.agents/rules/project_master_log.md` configured as persistent project rules.
-  - Previous Phase 2 dataset commit `205df6d` confirmed on GitHub `main`.
-- **Next Immediate Action**:
-  - Verify live website on Render ([https://pakskilliq.onrender.com/](https://pakskilliq.onrender.com/)) reflects the 314 real job records.
-  - Plan Phase 3 (automated pipelines / data accumulation) or explore supplementary Pakistan-specific data collection methods.
+- **Phase 3 Automation Planning**:
+  - Inspected collection entry point (`runner.py`, `pipeline.py`, `api_collectors.py`, `base.py`).
+  - Inspected dataset storage and deduplication logic (`cleaner.py`).
+  - Inspected Render dataset loading and caching (`app.py`).
+  - Confirmed Git status clean on branch `main`.
+  - Identified critical architectural requirement: **Incremental merging** must be added so scheduled runs append new listings and deduplicate rather than overwriting existing records.
+  - Formulated safe GitHub Actions workflow design with weekly schedule (`cron: '0 6 * * 1'`) and manual dispatch.
+
+### Immediate Next Steps
+1. User reviews the Phase 3 design, risk analysis, and scheduling options.
+2. Upon approval, implement incremental merge support in `runner.py` / `pipeline.py` (preserving the 314 historical jobs).
+3. Create `.github/workflows/scheduled_collection.yml` with `workflow_dispatch` and `schedule`.
+4. Test run the workflow manually via GitHub Actions to verify automated collection, deduplication, and conditional commit.
 
 ---
 
@@ -141,7 +147,7 @@ PakSkillIQ is a data intelligence platform built to monitor, analyze, and presen
   - Generated `PROJECT_MASTER_LOG.md` in project root with full history, metrics, and architecture.
   - Established persistent Antigravity rules in `AGENTS.md` and `.agents/rules/project_master_log.md`.
   - Inspected Git status and staged only the authorized documentation/rule files.
-  - Committed and pushed documentation files to GitHub `origin/main`.
+  - Committed and pushed documentation files to GitHub `origin/main` (commit `6f90c56`).
 - **Files Created**:
   - `PROJECT_MASTER_LOG.md`
   - `AGENTS.md`
@@ -149,5 +155,36 @@ PakSkillIQ is a data intelligence platform built to monitor, analyze, and presen
 - **Commands Executed**:
   - `git status`, `git branch`, `git remote -v`
   - `git log -n 5 --oneline` (verified `205df6d`)
+  - `git add PROJECT_MASTER_LOG.md AGENTS.md .agents/`
+  - `git commit -m "docs: add persistent project progress log"`
+  - `git push origin main` (pushed commit `6f90c56`)
 - **Git Status**: Pushed to GitHub `origin/main`.
+
+### Task 3: 2026-10-16 — Phase 3 Automation Planning & Pipeline Architecture Inspection
+- **User Request**:
+  - Inspect Phase 2 collection entry point, API mechanisms, dataset saving, deduplication, Render data loading, and current Git status.
+  - Explain a safe design for scheduled job collection via GitHub Actions and how data reaches Render.
+  - Do not modify code files, run APIs, regenerate datasets, commit, push, or deploy.
+  - Identify risks, required secrets, scheduling options, and next steps.
+  - Update `PROJECT_MASTER_LOG.md` with inspection findings and plan.
+- **Completed**:
+  - Inspected `src/collection/runner.py`, `src/collection/pipeline.py`, `src/collection/api_collectors.py`, `src/collection/base.py`, `src/data_processing/cleaner.py`, and `app.py`.
+  - Verified Git branch `main` is clean and in sync with `origin/main`.
+  - Identified critical risk: current `save_cleaned_data()` overwrites rather than appends; designed incremental merge solution.
+  - Formulated GitHub Actions workflow architecture (`contents: write`, conditional commits, weekly cron + manual dispatch).
+  - Documented findings, risks, and roadmap in `PROJECT_MASTER_LOG.md`.
+- **Files Inspected**:
+  - `PROJECT_MASTER_LOG.md`
+  - `src/collection/runner.py`
+  - `src/collection/pipeline.py`
+  - `src/collection/api_collectors.py`
+  - `src/collection/base.py`
+  - `src/data_processing/cleaner.py`
+  - `app.py`
+- **Files Modified**:
+  - `PROJECT_MASTER_LOG.md`
+- **Commands Executed**:
+  - `git status; git branch`
+- **Git Status**: Local documentation update only (no commits or pushes executed per instruction).
+
 
