@@ -1,0 +1,83 @@
+name: Scheduled Job Collection
+
+on:
+  schedule:
+    # Runs weekly on Monday at 06:00 UTC (11:00 AM PKT)
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max jobs to fetch per API (default: 25)'
+        required: false
+        default: '25'
+        type: string
+
+concurrency:
+  group: job-collection-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collect-and-update:
+    name: Collect & Incrementally Clean Jobs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history to support safe git rebase and push
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run test suite pre-flight check
+        run: |
+          pytest tests/ -v
+
+      - name: Execute collection with safe incremental merging
+        run: |
+          LIMIT_VAL="${{ inputs.limit || '25' }}"
+          echo "Running collection with limit: $LIMIT_VAL"
+          python src/collection/runner.py --limit "$LIMIT_VAL"
+
+      - name: Check for dataset changes
+        id: check_diff
+        run: |
+          if git diff --name-only | grep -q "^data/processed/cleaned_jobs.csv$"; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Dataset updated: changes detected in data/processed/cleaned_jobs.csv"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes: dataset already up to date with no new unique jobs."
+          fi
+
+      - name: Commit and push updated dataset
+        if: steps.check_diff.outputs.has_changes == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Stage ONLY the cleaned dataset (raw data remains local and gitignored)
+          git add data/processed/cleaned_jobs.csv
+
+          # Commit with clear provenance message
+          git commit -m "chore(data): automated weekly job collection update"
+
+          # Pull latest remote changes with rebase to prevent conflicts
+          git pull --rebase origin main
+
+          # Push safely to origin main (never force-push)
+          git push origin main

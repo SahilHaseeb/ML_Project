@@ -34,7 +34,7 @@ PakSkillIQ is a data intelligence platform built to monitor, analyze, and presen
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | Interactive Web Dashboard & Analytics | **COMPLETED** | 10 multi-page Streamlit views, dark UI, 50 sample records, comprehensive test suite. |
 | **Phase 2** | Job Data Collection & Data Cleaning | **COMPLETED** | Modular collectors (Remotive, Arbeitnow), cleaning pipeline, 314 real records; live on GitHub (`205df6d`). |
-| **Phase 3** | Pipeline Automation & Historical Data | **PLANNING** | GitHub Actions scheduled workflow design formulated; incremental accumulation & safe deployment planned. |
+| **Phase 3** | Pipeline Automation & Historical Data | **IN-PROGRESS** | Step 3.1 & 3.2 complete (incremental merge engine, GitHub Actions workflow created, 88 tests passing); Step 3.3 (manual run) pending. |
 | **Phase 4** | Machine Learning & NLP Modeling | **PLANNED** | TF-IDF / transformer job category classifier, resume-to-job skill gap scoring. |
 | **Phase 5** | Production Hardening & Monitoring | **PLANNED** | Persistent DB (PostgreSQL / BigQuery), automated alerting, health metrics. |
 
@@ -101,19 +101,31 @@ PakSkillIQ is a data intelligence platform built to monitor, analyze, and presen
 ## 6. Current Task & Immediate Next Steps
 
 ### Current Task Status
-- **Phase 3 Automation Planning**:
-  - Inspected collection entry point (`runner.py`, `pipeline.py`, `api_collectors.py`, `base.py`).
-  - Inspected dataset storage and deduplication logic (`cleaner.py`).
-  - Inspected Render dataset loading and caching (`app.py`).
-  - Confirmed Git status clean on branch `main`.
-  - Identified critical architectural requirement: **Incremental merging** must be added so scheduled runs append new listings and deduplicate rather than overwriting existing records.
-  - Formulated safe GitHub Actions workflow design with weekly schedule (`cron: '0 6 * * 1'`) and manual dispatch.
+- **Phase 3 Pre-Commit Review Completed & Verified**:
+  - Ran `git status --short`; confirmed branch `main` and remote `origin`.
+  - Audited `.github/workflows/scheduled_collection.yml`. Discovered a potential Git rebase conflict where `git pull --rebase` was sequenced before `git commit`; corrected sequence so commit occurs first.
+  - Inspected all code diffs (`cleaner.py`, `pipeline.py`, `runner.py`, `test_incremental_merge.py`, `scheduled_collection.yml`).
+  - Verified runner CLI arguments (`--limit`) match workflow parameters.
+  - Confirmed triple-layer anti-overwrite protections (early return on empty collection, safe merge, and shrink detection).
+  - Confirmed working tree purity (no secrets, raw snapshots, or temporary files).
+  - Executed offline unit tests (all 88 passed).
+  - Production dataset `cleaned_jobs.csv` verified unchanged (314 records).
 
-### Immediate Next Steps
-1. User reviews the Phase 3 design, risk analysis, and scheduling options.
-2. Upon approval, implement incremental merge support in `runner.py` / `pipeline.py` (preserving the 314 historical jobs).
-3. Create `.github/workflows/scheduled_collection.yml` with `workflow_dispatch` and `schedule`.
-4. Test run the workflow manually via GitHub Actions to verify automated collection, deduplication, and conditional commit.
+### Remaining Phase 3 Steps
+1. **User Review & Publishing**:
+   - Review pre-commit review report.
+   - Stage and commit Phase 3 implementation files:
+     - `.github/workflows/scheduled_collection.yml`
+     - `src/data_processing/cleaner.py`
+     - `src/collection/pipeline.py`
+     - `src/collection/runner.py`
+     - `tests/test_incremental_merge.py`
+     - `PROJECT_MASTER_LOG.md`
+   - Push to GitHub `origin/main`.
+2. **Step 3.3: Manual Verification via GitHub Actions Tab**:
+   - Verify workflow permissions ("Read and write permissions" enabled under repo Settings -> Actions -> General).
+   - Trigger manual run of "Scheduled Job Collection" workflow via GitHub Actions tab.
+   - Verify execution log and auto-deploy on Render.
 
 ---
 
@@ -185,6 +197,93 @@ PakSkillIQ is a data intelligence platform built to monitor, analyze, and presen
   - `PROJECT_MASTER_LOG.md`
 - **Commands Executed**:
   - `git status; git branch`
-- **Git Status**: Local documentation update only (no commits or pushes executed per instruction).
+- **Git Status**: Local documentation update only.
+
+### Task 4: 2026-10-16 — Phase 3 Step 3.1: Safe Incremental Merging Implementation
+- **User Request**:
+  - Implement safe incremental merging for the job collection pipeline.
+  - Preserve all existing records in `data/processed/cleaned_jobs.csv`.
+  - Deduplicate combined dataset using existing fingerprint logic.
+  - Never overwrite existing dataset with an empty or incomplete result on API failure.
+  - Add offline unit tests for merging, deduplication, preservation, and failure modes.
+  - Do not create GitHub Actions workflow yet, and do not commit or push.
+- **Completed**:
+  - Added `merge_cleaned_datasets()` and `safe_incremental_save()` to `src/data_processing/cleaner.py` with dataset shrink protection (`ValueError` on shrink) and atomic writing (`.tmp` file + `os.replace`).
+  - Updated `src/collection/pipeline.py` with try/except error isolation per collector.
+  - Updated `src/collection/runner.py` with `run_collection()`, safe preservation when APIs fail or return 0 records, and `--no-merge` CLI argument.
+  - Created `tests/test_incremental_merge.py` with 16 comprehensive offline unit tests.
+  - Executed full test suite: 88 passed (16 new + 72 previous), 0 failures.
+  - Verified production dataset `data/processed/cleaned_jobs.csv` integrity: 314 rows, SHA256 checksum unchanged.
+- **Files Modified**:
+  - `src/data_processing/cleaner.py`
+  - `src/collection/pipeline.py`
+  - `src/collection/runner.py`
+  - `PROJECT_MASTER_LOG.md`
+- **Files Created**:
+  - `tests/test_incremental_merge.py`
+- **Commands Executed**:
+  - `python -c "import pandas as pd; ..."` (verified 314 rows and SHA256 before edits)
+  - `pytest tests/test_incremental_merge.py -v` (16 passed in 3.76s)
+  - `pytest tests/ -v` (88 passed in 3.99s)
+  - `python -c "import pandas as pd; ..."` (verified 314 rows and SHA256 after edits)
+  - `git status`
+- **Git Status**: Local modifications only (not staged, not committed, not pushed).
+
+### Task 5: 2026-10-16 — Phase 3 Step 3.2: GitHub Actions Scheduled Collection Workflow
+- **User Request**:
+  - Create `.github/workflows/scheduled_collection.yml` with weekly schedule (`0 6 * * 1`) and manual `workflow_dispatch`.
+  - Python 3.12, pre-flight test gate, incremental merge, concurrency protection, least-privilege `contents: write`.
+  - Conditional commit/push of `data/processed/cleaned_jobs.csv` only on genuine changes.
+  - Safe rebase, no force-push, no live API execution during task.
+  - Do not commit or push yet; update `PROJECT_MASTER_LOG.md`.
+- **Completed**:
+  - Inspected repository configuration, CLI arguments, and dependencies in `requirements.txt`.
+  - Authored `.github/workflows/scheduled_collection.yml` matching all safety, concurrency, and permission constraints.
+  - Conducted offline workflow validation (syntax, triggers, inputs, actions, step chaining).
+  - Executed complete unit test suite: 88 passed in 3.86s.
+  - Verified `data/processed/cleaned_jobs.csv` integrity: 314 records, SHA256 checksum untouched.
+- **Files Created**:
+  - `.github/workflows/scheduled_collection.yml`
+- **Files Modified**:
+  - `PROJECT_MASTER_LOG.md`
+- **Commands Executed**:
+  - `pytest tests/ -v` (88 passed)
+  - `python -c "import pandas as pd; ..."` (checksum and row count verification)
+  - `git status`
+- **Git Status**: Local files ready for user review (unstaged, uncommitted).
+
+### Task 6: 2026-10-16 — Pre-Commit Review & Verification for Phase 3
+- **User Request**:
+  - Run `git status --short`, confirm branch and remote.
+  - Perform thorough audit of `.github/workflows/scheduled_collection.yml` (commands, YAML, permissions, dependencies, arguments, rebase/push).
+  - Inspect diffs for all Phase 3 files.
+  - Verify CLI argument compatibility and failure protections.
+  - Verify working tree purity (no secrets, raw snapshots, temporary files).
+  - Run safe offline validation and tests; report defects or confirm readiness.
+- **Completed**:
+  - Confirmed Git status: 4 modified tracked files (`PROJECT_MASTER_LOG.md`, `pipeline.py`, `runner.py`, `cleaner.py`), 2 untracked items (`.github/`, `tests/test_incremental_merge.py`). Branch `main` on `origin`.
+  - Discovered and fixed defect in `.github/workflows/scheduled_collection.yml`: corrected git command sequence so `git commit` executes before `git pull --rebase origin main` (preventing exit code 128 "index contains uncommitted changes").
+  - Inspected diffs for all 5 Phase 3 code/doc files. Confirmed strict compliance with canonical schema and location classification.
+  - Verified argument consistency: `--limit` cleanly maps to `runner.py`'s argparse.
+  - Confirmed triple-layer anti-overwrite protection: `runner.py` early exit + `safe_incremental_save()` empty batch rejection + dataset shrink check.
+  - Confirmed working tree cleanliness: no `.env`, no credentials, `data/raw/` remains excluded by `.gitignore`.
+  - Executed test suite: 88 passed in 10.56s.
+  - Verified production dataset `cleaned_jobs.csv`: exactly 314 rows, SHA256 checksum `efb248430acbcf250bd215b32c054cd61927b943125367b635de192de70d78c0` (100% verified untouched).
+- **Files Modified**:
+  - `.github/workflows/scheduled_collection.yml` (fixed rebase command ordering)
+  - `PROJECT_MASTER_LOG.md` (updated status and added review log)
+- **Commands Executed**:
+  - `git status --short; git branch; git remote -v`
+  - Python simulated git rebase script (reproduced exit code 128 and verified fix)
+  - `git diff src/data_processing/cleaner.py`
+  - `git diff src/collection/pipeline.py`
+  - `git diff src/collection/runner.py`
+  - `git diff PROJECT_MASTER_LOG.md`
+  - `pytest tests/ -q` (88 passed)
+  - `python -c "import pandas as pd; ..."` (production dataset hash check)
+- **Git Status**: Local files ready for commit review (not staged, not committed, not pushed).
+
+
+
 
 

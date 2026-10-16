@@ -222,6 +222,122 @@ def clean_pipeline(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
     return df, report
 
 
+def merge_cleaned_datasets(
+    existing_df: Optional[pd.DataFrame],
+    new_df: Optional[pd.DataFrame],
+) -> pd.DataFrame:
+    """
+    Safely merges an existing cleaned dataset with a new batch of cleaned jobs.
+
+    Guarantees:
+    1. Preserves all valid historical records from existing_df.
+    2. Appends newly discovered records from new_df.
+    3. Deduplicates based on job_url or composite fingerprint (title+company+location+date).
+    4. If new_df is empty or None, existing_df is returned unchanged.
+    5. If existing_df is empty or None, new_df is returned deduplicated.
+    """
+    has_existing = existing_df is not None and not existing_df.empty
+    has_new = new_df is not None and not new_df.empty
+
+    if not has_existing and not has_new:
+        return pd.DataFrame()
+
+    if not has_new:
+        logger.info("Incremental merge: no new records provided. Preserving existing dataset.")
+        return existing_df.copy().reset_index(drop=True)
+
+    if not has_existing:
+        logger.info(f"Incremental merge: no existing dataset. Initializing with {len(new_df)} new records.")
+        return deduplicate(new_df.copy())
+
+    # Both datasets have records — concatenate preserving existing records first.
+    # Because deduplicate() keeps the 'first' occurrence of duplicates,
+    # placing existing_df first preserves historical record attributes (job_id, scraped_at).
+    combined = pd.concat([existing_df, new_df], ignore_index=True)
+    deduped = deduplicate(combined)
+
+    new_count = len(deduped) - len(existing_df)
+    logger.info(
+        f"Incremental merge: {len(existing_df)} existing + {len(new_df)} new -> "
+        f"{len(deduped)} total ({new_count} net new listings added)."
+    )
+    return deduped
+
+
+def safe_incremental_save(
+    new_clean_df: Optional[pd.DataFrame],
+    output_path: str = "data/processed/cleaned_jobs.csv",
+) -> Tuple[Path, int, int]:
+    """
+    Safely merges newly cleaned jobs into the existing dataset and performs an atomic write.
+
+    Guarantees:
+    1. Never overwrites or empties the existing dataset if new_clean_df is None or empty.
+    2. Refuses to write if resulting row count would shrink (anti-corruption guard).
+    3. Uses an atomic write (writes to a .tmp file first, then renames) to prevent file corruption.
+
+    Parameters
+    ----------
+    new_clean_df : pd.DataFrame or None
+        Newly collected and cleaned jobs.
+    output_path : str
+        Destination CSV path.
+
+    Returns
+    -------
+    Tuple[Path, int, int]
+        (saved_path, total_rows, added_rows)
+    """
+    out = Path(output_path)
+    existing_df = load_cleaned_data(str(out))
+    existing_count = len(existing_df) if existing_df is not None else 0
+
+    # Guard 1: Empty or failed new batch — never destroy existing data
+    if new_clean_df is None or new_clean_df.empty:
+        if existing_count > 0:
+            logger.warning(
+                f"Collection yielded 0 new cleaned jobs. Preserving existing dataset "
+                f"({existing_count} rows) at {out} without modification."
+            )
+            return out, existing_count, 0
+        else:
+            logger.warning("Both existing and new datasets are empty. No file written.")
+            return out, 0, 0
+
+    # Merge existing + new with deduplication
+    merged_df = merge_cleaned_datasets(existing_df, new_clean_df)
+
+    # Guard 2: Dataset shrink protection
+    if len(merged_df) < existing_count:
+        raise ValueError(
+            f"Dataset shrink detected! Existing has {existing_count} rows, merged has "
+            f"{len(merged_df)} rows. Aborting write to prevent data loss."
+        )
+
+    # Guard 3: Atomic write (.tmp -> atomic rename)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = out.with_suffix(".csv.tmp")
+    try:
+        merged_df.to_csv(temp_path, index=False)
+        if not temp_path.exists() or temp_path.stat().st_size == 0:
+            raise IOError("Temporary save file was not created properly or is empty.")
+        os.replace(temp_path, out)
+    except Exception as e:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+        raise IOError(f"Atomic file write failed for {out}: {e}") from e
+
+    added_count = len(merged_df) - existing_count
+    logger.info(
+        f"Safe incremental save successful: {out} now contains {len(merged_df)} rows "
+        f"({added_count} net new added)."
+    )
+    return out, len(merged_df), added_count
+
+
 def save_cleaned_data(df: pd.DataFrame, output_path: str = "data/processed/cleaned_jobs.csv") -> Path:
     """
     Saves the cleaned DataFrame to the processed directory.

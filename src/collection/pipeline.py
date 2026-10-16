@@ -52,16 +52,22 @@ class CollectionPipeline:
         # 1. Remotive Collector
         if enable_remotive:
             logger.info("Executing Remotive API collection...")
-            remotive = RemotiveCollector(output_dir=str(self.raw_dir))
-            records = remotive.collect(category="software-dev", limit=remotive_limit)
-            all_records.extend(records)
+            try:
+                remotive = RemotiveCollector(output_dir=str(self.raw_dir))
+                records = remotive.collect(category="software-dev", limit=remotive_limit)
+                all_records.extend(records)
+            except Exception as e:
+                logger.error(f"Remotive collection error: {e}")
 
         # 2. Arbeitnow Collector
         if enable_arbeitnow:
             logger.info("Executing Arbeitnow API collection...")
-            arbeitnow = ArbeitnowCollector(output_dir=str(self.raw_dir))
-            records = arbeitnow.collect(page=1)
-            all_records.extend(records)
+            try:
+                arbeitnow = ArbeitnowCollector(output_dir=str(self.raw_dir))
+                records = arbeitnow.collect(page=1)
+                all_records.extend(records)
+            except Exception as e:
+                logger.error(f"Arbeitnow collection error: {e}")
 
         # 3. Optional Local Feeds (Pakistan local dumps or open datasets)
         if local_feed_paths:
