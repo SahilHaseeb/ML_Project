@@ -127,20 +127,37 @@ st.markdown("""
 
 # ── Cached data loader — only runs once per session ────────────────────────────
 @st.cache_data(ttl=300, show_spinner="Loading job data …")
-def load_data() -> tuple[pd.DataFrame, dict]:
+def _load_dataset_cached(dataset_choice: str) -> tuple[pd.DataFrame, dict]:
     """
-    Load and clean the job dataset.
-    
-    Returns:
-        (clean_df, quality_report)
+    Load and clean the requested job dataset.
+    Caches results for 300 seconds per dataset choice.
+    """
+    root = os.path.dirname(__file__)
+    if dataset_choice == "real":
+        real_path = os.path.join(root, "data", "processed", "cleaned_jobs.csv")
+        if os.path.exists(real_path) and os.path.getsize(real_path) > 0:
+            df = pd.read_csv(real_path, low_memory=False)
+            df["posting_date"] = pd.to_datetime(df["posting_date"], errors="coerce")
+            df["scraped_at"] = pd.to_datetime(df["scraped_at"], errors="coerce")
+            from src.data_processing.validators import generate_quality_report
+            report = generate_quality_report(df)
+            return df, report
 
-    `@st.cache_data` means Streamlit will remember the result for 300 seconds
-    (5 minutes) instead of reloading and re-cleaning on every page interaction.
-    """
-    csv_path = os.path.join(os.path.dirname(__file__), "data", "sample", "sample_jobs.csv")
-    raw_df = pd.read_csv(csv_path, low_memory=False)
+    # Default to Phase 1 sample data
+    sample_path = os.path.join(root, "data", "sample", "sample_jobs.csv")
+    raw_df = pd.read_csv(sample_path, low_memory=False)
     clean_df, report = clean_pipeline(raw_df)
     return clean_df, report
+
+
+def load_data(dataset_choice: str | None = None) -> tuple[pd.DataFrame, dict]:
+    """
+    Main data loader interface used by all dashboard pages.
+    Detects dataset from session_state or parameter.
+    """
+    if dataset_choice is None:
+        dataset_choice = st.session_state.get("selected_dataset", "real")
+    return _load_dataset_cached(dataset_choice)
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -156,6 +173,29 @@ with st.sidebar:
         </div>
     </div>
     """, unsafe_allow_html=True)
+    st.divider()
+
+    # ── Dataset Selector (Phase 2 requirement: keep sample and real data separate)
+    real_csv = os.path.join(os.path.dirname(__file__), "data", "processed", "cleaned_jobs.csv")
+    has_real = os.path.exists(real_csv) and os.path.getsize(real_csv) > 0
+
+    st.markdown("**📁 Data Source**")
+    options = []
+    if has_real:
+        options.append("🌐 Real Cleaned Jobs (Phase 2)")
+    options.append("🔬 Phase 1 Sample (50 jobs)")
+
+    curr_choice = st.session_state.get("selected_dataset", "real" if has_real else "sample")
+    default_idx = 0 if (has_real and curr_choice == "real") else (len(options) - 1)
+
+    chosen_label = st.selectbox(
+        "Select Active Dataset",
+        options,
+        index=default_idx,
+        label_visibility="collapsed",
+        key="dataset_selector_dropdown",
+    )
+    st.session_state["selected_dataset"] = "real" if "Real" in chosen_label else "sample"
     st.divider()
 
     st.markdown("**📊 Navigation**")
@@ -176,13 +216,22 @@ with st.sidebar:
     st.page_link("pages/10_about.py",                label="ℹ️  About / Data Sources",   icon=None)
 
     st.divider()
-    st.markdown(
-        "<div style='font-size:0.7rem; color:#475569; text-align:center;'>"
-        "⚠️ Phase 1 — Sample Data Only<br>"
-        "Data does not represent the real Pakistan job market."
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    if st.session_state["selected_dataset"] == "real":
+        st.markdown(
+            "<div style='font-size:0.7rem; color:#10B981; text-align:center;'>"
+            "✅ Phase 2 Active — Real Data<br>"
+            "Permitted APIs (Remotive / Arbeitnow)"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<div style='font-size:0.7rem; color:#F59E0B; text-align:center;'>"
+            "🔬 Phase 1 — Sample Demo Data<br>"
+            "50 synthetic demonstration listings."
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ── Home page content ──────────────────────────────────────────────────────────
@@ -190,15 +239,21 @@ def render_home():
     # Load data
     df, quality_report = load_data()
 
-    # Sample data warning banner
-    st.markdown("""
-    <div class="sample-banner">
-        🔬 <strong>SAMPLE DATA NOTICE:</strong> This dashboard currently uses a
-        <strong>synthetic demonstration dataset of 50 job listings</strong>.
-        It does <em>not</em> represent real job postings or the actual Pakistan job market.
-        Real data collection begins in Phase 4.
-    </div>
-    """, unsafe_allow_html=True)
+    # Dynamic banner based on active dataset
+    if st.session_state.get("selected_dataset") == "real":
+        st.markdown("""
+        <div style="background: linear-gradient(90deg, #064E3B, #065F46); border: 1px solid #10B981; border-radius: 8px; padding: 0.75rem 1rem; font-size: 0.85rem; color: #A7F3D0; margin-bottom: 1rem;">
+            ✅ <strong>REAL COLLECTED DATA (Phase 2):</strong> Viewing cleaned listings from permitted public APIs
+            (Remotive API & Arbeitnow API). Pakistan-eligible worldwide remote and domestic roles are strictly categorized.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div class="sample-banner">
+            🔬 <strong>SAMPLE DATA NOTICE:</strong> Currently viewing <strong>50 synthetic demonstration job listings</strong>.
+            Switch to <strong>Real Cleaned Jobs</strong> in the sidebar to view live collected data.
+        </div>
+        """, unsafe_allow_html=True)
 
     # Hero header
     st.markdown("""

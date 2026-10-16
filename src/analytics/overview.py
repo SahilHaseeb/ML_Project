@@ -83,7 +83,7 @@ def get_date_range(df: pd.DataFrame) -> tuple[Optional[str], Optional[str]]:
     """Return the (earliest, latest) posting dates as strings."""
     if "posting_date" not in df.columns:
         return None, None
-    dates = df["posting_date"].dropna()
+    dates = pd.to_datetime(df["posting_date"], errors="coerce").dropna()
     if dates.empty:
         return None, None
     return str(dates.min().date()), str(dates.max().date())

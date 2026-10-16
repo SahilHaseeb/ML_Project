@@ -11,6 +11,7 @@ Example problem this solves:
 
 import re
 import logging
+from typing import Optional, Tuple
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -208,3 +209,246 @@ def normalize_category_column(df: pd.DataFrame, col: str = "category") -> pd.Dat
         lambda x: normalize_category(x) if isinstance(x, str) else x
     )
     return df
+
+
+# ─── Canonical Pakistan Cities ───────────────────────────────────────────────
+PAKISTAN_CITIES = {
+    "Karachi", "Lahore", "Islamabad", "Rawalpindi", "Faisalabad",
+    "Multan", "Peshawar", "Quetta", "Sialkot", "Hyderabad",
+    "Gujranwala", "Abbottabad"
+}
+
+
+def classify_location_scope(location: str, candidate_required_location: str = "") -> str:
+    """
+    Classifies the geographic scope of a job listing.
+
+    Strict Rule: Never label a job as Pakistan-based without evidence from
+    its location or source data.
+
+    Returns one of:
+      - 'Pakistan (On-site / Hybrid)'
+      - 'Pakistan (Remote / Hybrid)'
+      - 'Pakistan-Eligible (Worldwide Remote)'
+      - 'Restricted Remote (Non-Pakistan)'
+      - 'International (On-site)'
+      - 'Unspecified'
+    """
+    loc_clean = str(location or "").strip()
+    cand_clean = str(candidate_required_location or "").strip()
+
+    loc_lower = loc_clean.lower()
+    cand_lower = cand_clean.lower()
+
+    # 1. Direct Pakistan physical locations
+    norm_city = normalize_city(loc_clean)
+    if norm_city in PAKISTAN_CITIES or "pakistan" in loc_lower or "pakistan" in cand_lower:
+        if "remote" in loc_lower or "remote" in cand_lower:
+            return "Pakistan (Remote / Hybrid)"
+        return "Pakistan (On-site / Hybrid)"
+
+    # 2. Worldwide remote jobs (eligible for Pakistan candidates)
+    worldwide_terms = [
+        "worldwide", "anywhere", "global", "all countries", "work from anywhere",
+        "remote (worldwide)", "worldwide (remote)", "remote - worldwide"
+    ]
+    if any(term in cand_lower for term in worldwide_terms) or any(term in loc_lower for term in worldwide_terms):
+        return "Pakistan-Eligible (Worldwide Remote)"
+
+    # 3. If remote is mentioned, check if restricted to non-Pakistan region
+    is_remote = "remote" in loc_lower or "remote" in cand_lower
+    restricted_regions = [
+        "usa", "us only", "united states", "europe", "eu only", "emea",
+        "uk only", "united kingdom", "canada", "germany", "france", "latam",
+        "north america", "apac only"
+    ]
+    if is_remote and (any(region in cand_lower for region in restricted_regions) or any(region in loc_lower for region in restricted_regions)):
+        return "Restricted Remote (Non-Pakistan)"
+
+    # 4. If remote is explicitly stated without region restriction
+    if is_remote:
+        return "Pakistan-Eligible (Worldwide Remote)"
+
+    # 5. International physical location
+    if loc_clean and loc_clean.lower() not in ["", "none", "nan", "unknown"]:
+        return "International (On-site)"
+
+    return "Unspecified"
+
+
+def clean_job_title(title: str) -> str:
+    """
+    Cleans raw job title:
+    - Strips bracketed text like [Remote], (Remote), (m/f/d), etc.
+    - Strips hiring tags like 'Urgent:', 'Immediate:', etc.
+    - Preserves standard role names.
+    """
+    if not isinstance(title, str) or not title.strip():
+        return ""
+    
+    t = title.strip()
+    # Strip bracketed metadata
+    t = re.sub(r"\[.*?\]", "", t)
+    t = re.sub(r"\((?:m/f/d|f/m/d|w/m/d|remote|hybrid|h/f)\)", "", t, flags=re.IGNORECASE)
+    # Strip common recruitment prefix tags
+    t = re.sub(r"^(?:hiring|urgent|we are hiring|immediate requirement|open role)[:\s\-]+", "", t, flags=re.IGNORECASE)
+    # Clean whitespace
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def clean_company_name(company: str) -> str:
+    """
+    Normalizes company names by trimming trailing corporate suffixes.
+    Never invents a missing company name.
+    """
+    if not isinstance(company, str) or not company.strip():
+        return ""
+
+    c = company.strip()
+    # Strip corporate endings (including standalone limited)
+    c = re.sub(
+        r"[\s,]+(?:pvt\.?\s*ltd\.?|private\s*limited|limited|ltd\.?|inc\.?|llc|corp\.?|corporation|gmbh)$",
+        "",
+        c,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Strip trailing punctuation
+    c = c.rstrip("-,. ")
+    return c if c else company.strip()
+
+
+def parse_experience_years(text: str) -> tuple[Optional[float], Optional[float]]:
+    """
+    Extracts experience_min and experience_max from free text.
+    Returns (None, None) if unknown — never invents numbers.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None, None
+
+    t = text.lower().strip()
+
+    # Fresh / Entry level
+    if re.search(r"\b(fresh|entry\s*level|intern|internship|graduate)\b", t):
+        return 0.0, 1.0
+
+    # Range pattern: e.g. "3-5 years", "2 to 4 yrs"
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?|\+)", t)
+    if range_match:
+        try:
+            exp_min = float(range_match.group(1))
+            exp_max = float(range_match.group(2))
+            if exp_min <= exp_max:
+                return exp_min, exp_max
+        except ValueError:
+            pass
+
+    # Minimum pattern: e.g. "3+ years", "min 2 years", "at least 5 years"
+    min_match = re.search(r"(?:min(?:imum)?|at\s*least)?\s*(\d+(?:\.\d+)?)\s*(?:\+|years?|yrs?)", t)
+    if min_match:
+        try:
+            exp_min = float(min_match.group(1))
+            return exp_min, None
+        except ValueError:
+            pass
+
+    return None, None
+
+
+def parse_salary(salary_raw: str) -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """
+    Safely parses salary string into (salary_min, salary_max, currency).
+    Returns (None, None, None) if undisclosed or unparseable.
+    Never estimates or guesses salary.
+    """
+    if not isinstance(salary_raw, str) or not salary_raw.strip():
+        return None, None, None
+
+    s = salary_raw.strip().lower()
+
+    # Skip non-numeric / undisclosed values
+    undisclosed = ["confidential", "undisclosed", "competitive", "market competitive", "negotiable", "tbd", "n/a"]
+    if any(u in s for u in undisclosed):
+        return None, None, None
+
+    # Detect currency
+    currency = None
+    if "pkr" in s or "rs" in s or "rupee" in s:
+        currency = "PKR"
+    elif "$" in s or "usd" in s:
+        currency = "USD"
+    elif "€" in s or "eur" in s:
+        currency = "EUR"
+    elif "£" in s or "gbp" in s:
+        currency = "GBP"
+
+    # Multiplier handling: 'k' -> 1,000, 'lac'/'lakh' -> 100,000
+    def _parse_val(val_str: str) -> Optional[float]:
+        v = val_str.strip().replace(",", "")
+        mult = 1.0
+        if "k" in v:
+            mult = 1000.0
+            v = v.replace("k", "")
+        elif "lac" in v or "lakh" in v:
+            mult = 100000.0
+            v = re.sub(r"lacs?|lakhs?", "", v)
+        try:
+            return round(float(v) * mult, 2)
+        except ValueError:
+            return None
+
+    # Strip currency signs before searching numbers
+    clean_s = s.replace("$", "").replace("€", "").replace("£", "")
+    clean_s = re.sub(r"\b(?:usd|eur|gbp|pkr|rs|rupees?)\b", "", clean_s)
+
+    # Check for range: e.g. "100,000 - 130,000" or "150k - 250k" or "1.5 lac - 2.5 lac"
+    range_match = re.search(r"(\d[\d,]*(?:\.\d+)?\s*(?:k|lac|lakh)?)\s*(?:-|to)\s*(\d[\d,]*(?:\.\d+)?\s*(?:k|lac|lakh)?)", clean_s)
+    if range_match:
+        min_v = _parse_val(range_match.group(1))
+        max_v = _parse_val(range_match.group(2))
+        if min_v and max_v:
+            if min_v > max_v:
+                min_v, max_v = max_v, min_v
+            return min_v, max_v, currency
+
+    # Single number
+    single_match = re.search(r"(\d[\d,]*(?:\.\d+)?\s*(?:k|lac|lakh)?)", clean_s)
+    if single_match:
+        val = _parse_val(single_match.group(1))
+        if val and val > 0:
+            return val, None, currency
+
+    return None, None, currency
+
+
+def infer_category(title: str, skills: str = "", default: str = "Software Development") -> str:
+    """
+    Infers technological category from title and skills if category is missing in raw source.
+    """
+    text = f"{title} {skills}".lower()
+
+    if any(k in text for k in ["data science", "data scientist", "machine learning", "deep learning", "ai engineer", "nlp"]):
+        return "Data Science"
+    if any(k in text for k in ["data analyst", "data analytics", "business intelligence", "bi analyst", "tableau", "power bi"]):
+        return "Data Analytics"
+    if any(k in text for k in ["data engineer", "data engineering", "etl", "spark", "hadoop", "airflow"]):
+        return "Data Engineering"
+    if any(k in text for k in ["devops", "cloud", "aws", "kubernetes", "docker", "sre", "infrastructure"]):
+        return "DevOps"
+    if any(k in text for k in ["frontend", "front-end", "react", "vue", "angular", "css", "html"]):
+        return "Web Development"
+    if any(k in text for k in ["backend", "back-end", "django", "flask", "fastapi", "spring", "laravel", "node", "express"]):
+        return "Software Development"
+    if any(k in text for k in ["full stack", "fullstack", "web developer"]):
+        return "Web Development"
+    if any(k in text for k in ["qa", "quality assurance", "test engineer", "automation engineer", "tester"]):
+        return "Quality Assurance"
+    if any(k in text for k in ["ui/ux", "product designer", "ui designer", "ux designer"]):
+        return "UI/UX Design"
+    if any(k in text for k in ["cybersecurity", "security analyst", "infosec", "penetration tester"]):
+        return "Cybersecurity"
+    if any(k in text for k in ["mobile developer", "android", "ios", "flutter", "react native"]):
+        return "Mobile Development"
+
+    return default
+
