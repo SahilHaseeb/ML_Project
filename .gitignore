@@ -10,9 +10,10 @@ env/
 dist/
 build/
 
-# Data — raw and processed files stay local
+# Data — raw files stay local, track cleaned dataset
 data/raw/
-data/processed/
+data/processed/*
+!data/processed/cleaned_jobs.csv
 
 # IDE
 .vscode/
